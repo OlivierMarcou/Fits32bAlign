@@ -4,13 +4,29 @@ import java.util.*;
 
 /**
  * Alignement avancé pour astrophotographie ciel profond
- * Gère rotation, échelle et translation
+ * - Gère rotation, échelle et translation
+ * - Calcule un canvas élargi pour ne rien rogner
  */
 public class ImageAligner {
     private static final int MIN_MATCHING_STARS = 10;
     private static final double MAX_DISTANCE_TOLERANCE = 5.0;
     private static final int RANSAC_ITERATIONS = 500;
     private static final double RANSAC_THRESHOLD = 3.0;
+
+    // Classe pour stocker les informations du canvas élargi
+    public static class CanvasInfo {
+        public final int width;
+        public final int height;
+        public final int offsetX;
+        public final int offsetY;
+
+        public CanvasInfo(int width, int height, int offsetX, int offsetY) {
+            this.width = width;
+            this.height = height;
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+        }
+    }
 
     public static void alignImages(List<FitsImage> images, ProgressCallback callback) {
         if (images.isEmpty()) return;
@@ -60,7 +76,7 @@ public class ImageAligner {
             List<Star> imageStars = allStars.get(i);
 
             if (callback != null) {
-                int progress = 30 + (int) ((i * 70.0) / images.size());
+                int progress = 30 + (int) ((i * 40.0) / images.size());
                 callback.onProgress(progress, "Alignement de " + image.getFileName() + "...");
             }
 
@@ -78,9 +94,86 @@ public class ImageAligner {
             }
         }
 
+        // Calculer le canvas élargi nécessaire
+        if (callback != null) {
+            callback.onProgress(70, "Calcul du canvas élargi...");
+        }
+
+        CanvasInfo canvasInfo = calculateExpandedCanvas(images);
+
+        if (callback != null) {
+            callback.onProgress(80, String.format(
+                    "Canvas élargi: %dx%d pixels (offset: %d, %d)",
+                    canvasInfo.width, canvasInfo.height,
+                    canvasInfo.offsetX, canvasInfo.offsetY
+            ));
+        }
+
+        // Stocker les informations du canvas dans chaque image
+        for (FitsImage image : images) {
+            image.setCanvasInfo(canvasInfo);
+        }
+
         if (callback != null) {
             callback.onProgress(100, "Alignement terminé!");
         }
+    }
+
+    /**
+     * Calcule le canvas élargi nécessaire pour contenir toutes les images alignées
+     */
+    private static CanvasInfo calculateExpandedCanvas(List<FitsImage> images) {
+        if (images.isEmpty()) {
+            return new CanvasInfo(0, 0, 0, 0);
+        }
+
+        double minX = Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE;
+        double maxX = Double.MIN_VALUE;
+        double maxY = Double.MIN_VALUE;
+
+        // Pour chaque image, calculer les coins transformés
+        for (FitsImage image : images) {
+            int w = image.getWidth();
+            int h = image.getHeight();
+            AffineTransform transform = image.getTransform();
+
+            // Les 4 coins de l'image
+            double[][] corners = {
+                    {0, 0},
+                    {w, 0},
+                    {w, h},
+                    {0, h}
+            };
+
+            // Transformer chaque coin
+            for (double[] corner : corners) {
+                double[] transformed = transform.apply(corner[0], corner[1]);
+                double tx = transformed[0];
+                double ty = transformed[1];
+
+                minX = Math.min(minX, tx);
+                minY = Math.min(minY, ty);
+                maxX = Math.max(maxX, tx);
+                maxY = Math.max(maxY, ty);
+            }
+        }
+
+        // Calculer les dimensions du canvas
+        int canvasWidth = (int) Math.ceil(maxX - minX);
+        int canvasHeight = (int) Math.ceil(maxY - minY);
+
+        // Offset pour placer toutes les images dans le canvas
+        int offsetX = (int) Math.floor(-minX);
+        int offsetY = (int) Math.floor(-minY);
+
+        System.out.println(String.format(
+                "Canvas calculé: %dx%d (offset: %d, %d) - Expansion: %.1f%%",
+                canvasWidth, canvasHeight, offsetX, offsetY,
+                ((canvasWidth * canvasHeight) / (double)(images.get(0).getWidth() * images.get(0).getHeight()) - 1) * 100
+        ));
+
+        return new CanvasInfo(canvasWidth, canvasHeight, offsetX, offsetY);
     }
 
     /**

@@ -6,19 +6,47 @@ import nom.tam.util.BufferedDataOutputStream;
 import java.io.*;
 import java.nio.file.Path;
 
+/**
+ * Gestion des images FITS avec support:
+ * - Images monochromes et RGB (3 canaux)
+ * - Alignement avec canvas élargi (pas de rognage)
+ * - Interpolation bilinéaire pour transformations
+ */
 public class FitsImage {
-    private final Path path;
-    private float[][] data;
-    private int width;
-    private int height;
-    private ImageAligner.AffineTransform transform = ImageAligner.AffineTransform.identity();
+    protected final Path path;
+    protected float[][] data;  // Pour images grayscale
+    protected float[][][] colorData;  // Pour images RGB [canal][y][x]
+    protected int width;
+    protected int height;
+    protected boolean isColor = false;
+    protected ImageAligner.AffineTransform transform = ImageAligner.AffineTransform.identity();
+    protected ImageAligner.CanvasInfo canvasInfo = null;
 
     public FitsImage(Path path) throws Exception {
         this.path = path;
         loadFits();
     }
 
-    private void loadFits() throws Exception {
+    // Constructeur pour créer une image vide
+    protected FitsImage(Path path, int width, int height, boolean isColor) {
+        this.path = path;
+        this.width = width;
+        this.height = height;
+        this.isColor = isColor;
+        if (isColor) {
+            this.colorData = new float[3][height][width];
+            this.data = new float[height][width]; // Version mono pour détection étoiles
+        } else {
+            this.data = new float[height][width];
+        }
+    }
+
+    // Constructeur statique pour créer une image vide
+    public static FitsImage createEmpty(Path path, int width, int height, boolean isColor) {
+        return new FitsImage(path, width, height, isColor);
+    }
+
+    protected void loadFits() throws Exception {
         try (Fits fits = new Fits(path.toFile())) {
             BasicHDU<?> hdu = fits.readHDU();
 
@@ -32,11 +60,48 @@ public class FitsImage {
                 throw new IllegalArgumentException("Aucune donnée dans le fichier FITS");
             }
 
-            // Log du type détecté pour debug
             System.out.println("Type FITS détecté: " + rawData.getClass().getName());
 
-            // Convert to float[][] regardless of input type
-            if (rawData instanceof float[][] floatData) {
+            // Gestion des images RGB (3 canaux)
+            if (rawData instanceof float[][][]) {
+                float[][][] data3D = (float[][][]) rawData;
+                if (data3D.length == 3) {
+                    loadColorFloat3D(data3D);
+                    System.out.println("Format: float[][][] RGB (3 canaux x " + width + "x" + height + ")");
+                } else {
+                    this.data = extract2DFromFloat3D(data3D);
+                    System.out.println("Format: float[][][] (3D cube - extraction plan 1)");
+                }
+            } else if (rawData instanceof short[][][]) {
+                short[][][] data3D = (short[][][]) rawData;
+                if (data3D.length == 3) {
+                    loadColorShort3D(data3D);
+                    System.out.println("Format: short[][][] RGB (3 canaux x " + width + "x" + height + ")");
+                } else {
+                    this.data = extract2DFromShort3D(data3D);
+                    System.out.println("Format: short[][][] (3D cube - extraction plan 1)");
+                }
+            } else if (rawData instanceof int[][][]) {
+                int[][][] data3D = (int[][][]) rawData;
+                if (data3D.length == 3) {
+                    loadColorInt3D(data3D);
+                    System.out.println("Format: int[][][] RGB (3 canaux x " + width + "x" + height + ")");
+                } else {
+                    this.data = extract2DFromInt3D(data3D);
+                    System.out.println("Format: int[][][] (3D cube - extraction plan 1)");
+                }
+            } else if (rawData instanceof double[][][]) {
+                double[][][] data3D = (double[][][]) rawData;
+                if (data3D.length == 3) {
+                    loadColorDouble3D(data3D);
+                    System.out.println("Format: double[][][] RGB (3 canaux x " + width + "x" + height + ")");
+                } else {
+                    this.data = extract2DFromDouble3D(data3D);
+                    System.out.println("Format: double[][][] (3D cube - extraction plan 1)");
+                }
+            }
+            // Gestion des images 2D mono
+            else if (rawData instanceof float[][] floatData) {
                 this.data = floatData;
                 System.out.println("Format: float[][] (32-bit float)");
             } else if (rawData instanceof short[][] shortData) {
@@ -54,24 +119,9 @@ public class FitsImage {
             } else if (rawData instanceof byte[][] byteData) {
                 this.data = convertToFloat(byteData);
                 System.out.println("Format: byte[][] (8-bit integer)");
-            } else if (rawData instanceof float[][][]) {
-                // Images 3D (RGB, cubes de données, etc.) - extraction du premier plan
-                this.data = extract2DFromFloat3D((float[][][]) rawData);
-                System.out.println("Format: float[][][] (3D cube - extraction plan 1)");
-            } else if (rawData instanceof short[][][]) {
-                this.data = extract2DFromShort3D((short[][][]) rawData);
-                System.out.println("Format: short[][][] (3D cube - extraction plan 1)");
-            } else if (rawData instanceof int[][][]) {
-                this.data = extract2DFromInt3D((int[][][]) rawData);
-                System.out.println("Format: int[][][] (3D cube - extraction plan 1)");
-            } else if (rawData instanceof double[][][]) {
-                this.data = extract2DFromDouble3D((double[][][]) rawData);
-                System.out.println("Format: double[][][] (3D cube - extraction plan 1)");
-            } else if (rawData instanceof byte[][][]) {
-                this.data = extract2DFromByte3D((byte[][][]) rawData);
-                System.out.println("Format: byte[][][] (3D cube - extraction plan 1)");
-            } else if (rawData instanceof float[]) {
-                // Parfois les données 1D doivent être converties en 2D
+            }
+            // Gestion des images 1D à convertir en 2D
+            else if (rawData instanceof float[]) {
                 this.data = convert1DToFloat((float[]) rawData, hdu);
                 System.out.println("Format: float[] (1D array converted to 2D)");
             } else if (rawData instanceof short[]) {
@@ -94,7 +144,92 @@ public class FitsImage {
             this.height = data.length;
             this.width = data[0].length;
 
-            System.out.println("Image chargée: " + width + "x" + height + " pixels");
+            System.out.println("Image chargée: " + width + "x" + height + " pixels" +
+                    (isColor ? " (RGB)" : " (Mono)"));
+        }
+    }
+
+    // ========== Chargement des images RGB ==========
+
+    private void loadColorFloat3D(float[][][] input) {
+        isColor = true;
+        height = input[0].length;
+        width = input[0][0].length;
+        colorData = input;
+
+        // Créer une version mono (canal vert) pour la détection d'étoiles
+        data = new float[height][width];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                data[y][x] = colorData[1][y][x]; // Canal vert (G)
+            }
+        }
+    }
+
+    private void loadColorShort3D(short[][][] input) {
+        isColor = true;
+        height = input[0].length;
+        width = input[0][0].length;
+        colorData = new float[3][height][width];
+
+        for (int c = 0; c < 3; c++) {
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    colorData[c][y][x] = input[c][y][x] & 0xFFFF;
+                }
+            }
+        }
+
+        // Version mono
+        data = new float[height][width];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                data[y][x] = colorData[1][y][x];
+            }
+        }
+    }
+
+    private void loadColorInt3D(int[][][] input) {
+        isColor = true;
+        height = input[0].length;
+        width = input[0][0].length;
+        colorData = new float[3][height][width];
+
+        for (int c = 0; c < 3; c++) {
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    colorData[c][y][x] = input[c][y][x];
+                }
+            }
+        }
+
+        data = new float[height][width];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                data[y][x] = colorData[1][y][x];
+            }
+        }
+    }
+
+    private void loadColorDouble3D(double[][][] input) {
+        isColor = true;
+        height = input[0].length;
+        width = input[0][0].length;
+        colorData = new float[3][height][width];
+
+        for (int c = 0; c < 3; c++) {
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    colorData[c][y][x] = (float) input[c][y][x];
+                }
+            }
+        }
+
+        data = new float[height][width];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                data[y][x] = colorData[1][y][x];
+            }
         }
     }
 
@@ -104,7 +239,7 @@ public class FitsImage {
         float[][] result = new float[input.length][input[0].length];
         for (int y = 0; y < input.length; y++) {
             for (int x = 0; x < input[0].length; x++) {
-                result[y][x] = input[y][x] & 0xFFFF; // unsigned short
+                result[y][x] = input[y][x] & 0xFFFF;
             }
         }
         return result;
@@ -133,7 +268,7 @@ public class FitsImage {
     private float[][] convertToFloat(double[][] input) {
         float[][] result = new float[input.length][input[0].length];
         for (int y = 0; y < input.length; y++) {
-            for (int x = 0; x < input[0].length; x++) {
+            for (int x = 0; x < width; x++) {
                 result[y][x] = (float) input[y][x];
             }
         }
@@ -144,7 +279,7 @@ public class FitsImage {
         float[][] result = new float[input.length][input[0].length];
         for (int y = 0; y < input.length; y++) {
             for (int x = 0; x < input[0].length; x++) {
-                result[y][x] = input[y][x] & 0xFF; // unsigned byte
+                result[y][x] = input[y][x] & 0xFF;
             }
         }
         return result;
@@ -163,7 +298,6 @@ public class FitsImage {
 
         System.out.println("Cube 3D détecté: " + numPlanes + " plans de " + width + "x" + height);
 
-        // Extraction du premier plan (vous pouvez modifier pour faire une moyenne de tous les plans)
         float[][] result = new float[height][width];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
@@ -315,8 +449,16 @@ public class FitsImage {
 
     public void saveFits(Path outputPath) throws Exception {
         Fits fits = new Fits();
-        ImageHDU hdu = (ImageHDU) Fits.makeHDU(data);
-        fits.addHDU(hdu);
+
+        if (isColor && colorData != null) {
+            // Sauvegarder en format RGB
+            ImageHDU hdu = (ImageHDU) Fits.makeHDU(colorData);
+            fits.addHDU(hdu);
+        } else {
+            // Sauvegarder en mono
+            ImageHDU hdu = (ImageHDU) Fits.makeHDU(data);
+            fits.addHDU(hdu);
+        }
 
         try (BufferedDataOutputStream os = new BufferedDataOutputStream(
                 new FileOutputStream(outputPath.toFile()))) {
@@ -331,14 +473,45 @@ public class FitsImage {
         return data[y][x];
     }
 
+    public float getPixel(int channel, int x, int y) {
+        if (!isColor || colorData == null) {
+            return getPixel(x, y);
+        }
+
+        if (channel < 0 || channel >= 3 || x < 0 || x >= width || y < 0 || y >= height) {
+            return 0;
+        }
+
+        return colorData[channel][y][x];
+    }
+
     public void setPixel(int x, int y, float value) {
         if (x >= 0 && x < width && y >= 0 && y < height) {
             data[y][x] = value;
         }
     }
 
+    public void setPixel(int channel, int x, int y, float value) {
+        if (!isColor || colorData == null) {
+            setPixel(x, y, value);
+            return;
+        }
+
+        if (channel >= 0 && channel < 3 && x >= 0 && x < width && y >= 0 && y < height) {
+            colorData[channel][y][x] = value;
+        }
+    }
+
     public float[][] getData() {
         return data;
+    }
+
+    public float[][][] getColorData() {
+        return colorData;
+    }
+
+    public boolean isColor() {
+        return isColor;
     }
 
     public int getWidth() {
@@ -365,26 +538,59 @@ public class FitsImage {
         return transform;
     }
 
+    public void setCanvasInfo(ImageAligner.CanvasInfo canvasInfo) {
+        this.canvasInfo = canvasInfo;
+    }
+
+    public ImageAligner.CanvasInfo getCanvasInfo() {
+        return canvasInfo;
+    }
+
     /**
-     * Crée une copie alignée avec transformation affine complète
-     * (rotation + échelle + translation) avec interpolation bilinéaire
+     * Crée une copie alignée avec canvas élargi pour ne rien rogner
+     * @param canvasWidth Largeur du canvas élargi
+     * @param canvasHeight Hauteur du canvas élargi
+     * @param offsetX Décalage X pour placer l'image dans le canvas
+     * @param offsetY Décalage Y pour placer l'image dans le canvas
      */
-    public FitsImage createAlignedCopy() {
+    public FitsImage createAlignedCopy(int canvasWidth, int canvasHeight, int offsetX, int offsetY) {
         try {
-            FitsImage copy = new FitsImage(this.path);
-            copy.data = new float[height][width];
+            FitsImage copy = FitsImage.createEmpty(this.path, canvasWidth, canvasHeight, this.isColor);
 
-            // Pour chaque pixel de l'image de destination
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    // Transformer le point de destination vers la source
-                    double[] srcPoint = transform.applyInverse(x, y);
-                    double srcX = srcPoint[0];
-                    double srcY = srcPoint[1];
+            if (isColor && colorData != null) {
+                // Transformer chaque canal RGB
+                for (int c = 0; c < 3; c++) {
+                    for (int y = 0; y < canvasHeight; y++) {
+                        for (int x = 0; x < canvasWidth; x++) {
+                            // Transformer le point de destination vers la source
+                            double[] srcPoint = transform.applyInverse(x - offsetX, y - offsetY);
+                            double srcX = srcPoint[0];
+                            double srcY = srcPoint[1];
 
-                    // Interpolation bilinéaire
-                    float value = interpolate(srcX, srcY);
-                    copy.data[y][x] = value;
+                            float value = interpolateChannel(c, srcX, srcY);
+                            copy.colorData[c][y][x] = value;
+                        }
+                    }
+                }
+
+                // Mettre à jour la version mono (canal vert)
+                for (int y = 0; y < canvasHeight; y++) {
+                    for (int x = 0; x < canvasWidth; x++) {
+                        copy.data[y][x] = copy.colorData[1][y][x];
+                    }
+                }
+            } else {
+                // Image mono
+                for (int y = 0; y < canvasHeight; y++) {
+                    for (int x = 0; x < canvasWidth; x++) {
+                        // Transformer le point de destination vers la source
+                        double[] srcPoint = transform.applyInverse(x - offsetX, y - offsetY);
+                        double srcX = srcPoint[0];
+                        double srcY = srcPoint[1];
+
+                        float value = interpolate(srcX, srcY);
+                        copy.data[y][x] = value;
+                    }
                 }
             }
 
@@ -395,29 +601,54 @@ public class FitsImage {
     }
 
     /**
-     * Interpolation bilinéaire pour un échantillonnage sub-pixel lisse
+     * Interpolation bilinéaire pour un canal spécifique (RGB)
      */
-    private float interpolate(double x, double y) {
-        // Si hors limites, retourner 0
+    private float interpolateChannel(int channel, double x, double y) {
         if (x < 0 || x >= width - 1 || y < 0 || y >= height - 1) {
             return 0;
         }
 
-        // Coordonnées entières
         int x0 = (int) Math.floor(x);
         int y0 = (int) Math.floor(y);
         int x1 = x0 + 1;
         int y1 = y0 + 1;
 
-        // Fractions
         double dx = x - x0;
         double dy = y - y0;
 
-        // Vérifier les limites
         if (x1 >= width) x1 = width - 1;
         if (y1 >= height) y1 = height - 1;
 
-        // Interpolation bilinéaire
+        float v00 = colorData[channel][y0][x0];
+        float v10 = colorData[channel][y0][x1];
+        float v01 = colorData[channel][y1][x0];
+        float v11 = colorData[channel][y1][x1];
+
+        float v0 = (float) (v00 * (1 - dx) + v10 * dx);
+        float v1 = (float) (v01 * (1 - dx) + v11 * dx);
+
+        return (float) (v0 * (1 - dy) + v1 * dy);
+    }
+
+    /**
+     * Interpolation bilinéaire pour image mono
+     */
+    private float interpolate(double x, double y) {
+        if (x < 0 || x >= width - 1 || y < 0 || y >= height - 1) {
+            return 0;
+        }
+
+        int x0 = (int) Math.floor(x);
+        int y0 = (int) Math.floor(y);
+        int x1 = x0 + 1;
+        int y1 = y0 + 1;
+
+        double dx = x - x0;
+        double dy = y - y0;
+
+        if (x1 >= width) x1 = width - 1;
+        if (y1 >= height) y1 = height - 1;
+
         float v00 = data[y0][x0];
         float v10 = data[y0][x1];
         float v01 = data[y1][x0];
