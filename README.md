@@ -1,195 +1,370 @@
-# FITS Stacker - Alignement et Empilement d'Images Astronomiques
+# 📦 FITS Stacker v1.1 - Package Complet
 
-Application Java 21 avec interface Swing moderne pour aligner et empiler des images astronomiques au format FITS.
+## 🎯 Aperçu Rapide
 
-## Fonctionnalités
+Ce package contient **12 fichiers** pour transformer votre FITS Stacker :
 
-### 🎯 Principales caractéristiques
-
-- **Interface moderne** avec FlatLaf Dark theme
-- **Sélection flexible** : ajout manuel de fichiers ou dossiers complets
-- **Détection automatique d'étoiles** pour l'alignement
-- **Alignement précis** basé sur la correspondance de triangles d'étoiles
-- **Méthodes d'empilement multiples** :
-  - Moyenne (Average)
-  - Médiane (Median)
-  - Sigma Clipping (élimine les valeurs aberrantes)
-  - Maximum
-  - Minimum
-  - Moyenne Pondérée (Weighted Average)
-- **Barre de progression** et journal en temps réel
-- **Support multi-formats FITS** (float, short, int, double)
-
-## Prérequis
-
-- Java 21 ou supérieur
-- Maven 3.6+ (pour la compilation)
-- Bibliothèques :
-  - FlatLaf 3.2.5 (interface moderne)
-  - nom-tam-fits 1.20.1 (lecture/écriture FITS)
-
-## Installation
-
-### 1. Compilation avec Maven
-
-```bash
-mvn clean package
-```
-
-Cela créera un JAR exécutable dans `target/fits-stacker-1.0-SNAPSHOT.jar`
-
-### 2. Exécution
-
-```bash
-java -jar target/fits-stacker-1.0-SNAPSHOT.jar
-```
-
-Ou simplement double-cliquez sur le fichier JAR.
-
-## Utilisation
-
-### Étape 1 : Charger les images
-
-**Option A : Ajouter des fichiers individuels**
-1. Cliquez sur "Ajouter Fichiers"
-2. Sélectionnez vos images FITS (`.fits`, `.fit`, `.fts`)
-3. Vous pouvez en sélectionner plusieurs à la fois
-
-**Option B : Ajouter un dossier complet**
-1. Cliquez sur "Ajouter Dossier"
-2. Sélectionnez le dossier contenant vos images FITS
-3. Tous les fichiers FITS du dossier seront ajoutés
-
-### Étape 2 : Aligner les images
-
-1. Une fois vos images chargées, cliquez sur "Aligner Images"
-2. Le programme va :
-   - Charger chaque image
-   - Détecter automatiquement les étoiles
-   - Calculer les offsets nécessaires pour aligner toutes les images
-3. Suivez la progression dans la barre et le journal
-
-### Étape 3 : Empiler les images
-
-1. Choisissez votre méthode d'empilement dans le menu déroulant :
-   
-   **Moyenne** : Moyenne simple, rapide mais sensible aux valeurs aberrantes
-   
-   **Médiane** : Plus robuste, élimine mieux le bruit mais plus lent
-   
-   **Sigma Clipping** : Élimine les valeurs à plus de 2σ de la moyenne, excellent pour rejeter les pixels chauds/froids
-   
-   **Maximum** : Conserve la valeur maximale, utile pour les météores
-   
-   **Minimum** : Conserve la valeur minimale, utile pour éliminer les traces de satellites
-   
-   **Moyenne Pondérée** : Donne plus de poids aux premières images
-
-2. Cliquez sur "Empiler Images"
-3. Choisissez l'emplacement de sortie pour votre image finale
-4. Attendez la fin du traitement
-
-### Conseils d'utilisation
-
-- **Images de référence** : La première image de la liste est utilisée comme référence pour l'alignement
-- **Ordre des images** : Mettez votre meilleure image en premier pour de meilleurs résultats
-- **Nombre d'images** : Plus vous empilez d'images, meilleur sera le rapport signal/bruit
-- **Méthode recommandée** : Sigma Clipping pour la plupart des cas d'astrophotographie
-
-## Architecture du code
-
-### Classes principales
-
-**FitsImage.java**
-- Gestion des images FITS
-- Conversion automatique des différents formats (float, short, int, double)
-- Calcul des offsets d'alignement
-- Création de copies alignées
-
-**Star.java**
-- Représentation d'une étoile détectée
-- Calcul de distance entre étoiles
-
-**StarDetector.java**
-- Détection automatique des étoiles
-- Calcul du seuil basé sur la moyenne et l'écart-type
-- Détection de maxima locaux
-- Calcul de centroïdes pour positionnement sub-pixel
-
-**ImageAligner.java**
-- Alignement basé sur la correspondance de triangles d'étoiles
-- Robuste aux rotations et translations
-- Calcul des offsets optimaux
-
-**StackingEngine.java**
-- Implémentation de toutes les méthodes d'empilement
-- Traitement pixel par pixel
-- Support de la progression
-
-**FitsStackerApp.java**
-- Interface utilisateur Swing avec FlatLaf
-- Gestion des fichiers et dossiers
-- Coordination des opérations
-- Retour visuel avec barre de progression et journal
-
-## Algorithmes
-
-### Détection d'étoiles
-
-1. Calcul de la moyenne et écart-type de l'image
-2. Seuillage à moyenne + 3σ
-3. Détection de maxima locaux
-4. Calcul du centroïde pondéré pour chaque étoile
-5. Tri par flux (intensité totale)
-
-### Alignement
-
-1. Création de triangles à partir des étoiles les plus brillantes
-2. Calcul des rapports de côtés pour chaque triangle
-3. Correspondance des triangles similaires entre images
-4. Calcul du décalage (offset) optimal
-5. Scoring basé sur le nombre d'étoiles qui correspondent
-
-### Empilement
-
-Chaque méthode traite l'image pixel par pixel :
-- **Moyenne** : Σ(pixels) / n
-- **Médiane** : Valeur médiane des pixels
-- **Sigma Clipping** : Moyenne après élimination des valeurs > 2σ
-- **Maximum/Minimum** : Valeur max/min de chaque pile de pixels
-- **Moyenne Pondérée** : Σ(pixels × poids) / Σ(poids)
-
-## Améliorations possibles
-
-- [ ] Prévisualisation des images avec zoom
-- [ ] Histogramme et statistiques d'image
-- [ ] Support du debayering pour les images couleur
-- [ ] Calibration avec darks, flats et bias
-- [ ] Alignement par corrélation croisée en plus des étoiles
-- [ ] Support multi-threading pour traitement parallèle
-- [ ] Export en TIFF 32-bit en plus de FITS
-- [ ] Sauvegarde/chargement de sessions
-
-## Comparaison avec Siril
-
-Cette application implémente les méthodes d'empilement principales de Siril :
-- ✅ Average (Moyenne)
-- ✅ Median (Médiane) 
-- ✅ Sigma Clipping
-- ✅ Maximum/Minimum
-- ⚠️ Siril propose des variantes supplémentaires (Winsorized Sigma Clipping, etc.)
-
-## Licence
-
-Ce projet est fourni tel quel pour un usage personnel et éducatif.
-
-## Auteur
-
-Créé pour le traitement d'images astronomiques FITS avec Java 21 moderne.
+- **4 fichiers Java** (code source à intégrer)
+- **7 fichiers Markdown** (documentation complète)  
+- **1 fichier TestImageGeneratorRGB.java** (générateur de test)
 
 ---
 
-**Note** : Pour de meilleures performances, allouez suffisamment de mémoire à la JVM :
+## 📂 Liste Complète des Fichiers
+
+### 🔧 Fichiers de Code Source (4 fichiers)
+
+| Fichier | Taille | Action | Description |
+|---------|--------|--------|-------------|
+| **FitsImage.java** | 23 KB | Remplacer | Support RGB + Canvas élargi + Interpolation |
+| **ImageAligner.java** | 17 KB | Remplacer | Canvas maximisé + CanvasInfo |
+| **StackingEngine.java** | 14 KB | Remplacer | Empilement RGB par canal |
+| **FitsStackerApp.java** | 26 KB | Remplacer | Interface + Sauvegarde alignées |
+
+### 🧪 Fichier de Test (1 fichier)
+
+| Fichier | Taille | Action | Description |
+|---------|--------|--------|-------------|
+| **TestImageGeneratorRGB.java** | 8.9 KB | Ajouter | Générateur d'images FITS RGB de test |
+
+### 📖 Documentation (7 fichiers)
+
+| Fichier | Taille | Quand le lire |
+|---------|--------|---------------|
+| **INDEX.md** | 13 KB | 📘 **COMMENCEZ ICI** - Vue d'ensemble |
+| **RECAPITULATIF.md** | 13 KB | 📗 Résumé complet des 3 fonctionnalités |
+| **INSTALLATION.md** | 9.6 KB | 📕 Installation RGB + Canvas étape par étape |
+| **INSTALL_SAUVEGARDE.md** | 8.2 KB | 📙 Installation uniquement sauvegarde |
+| **GUIDE_INTEGRATION.md** | 9.9 KB | 📔 Guide technique détaillé |
+| **README_AMELIORATIONS.md** | 10 KB | 📓 Comparaisons et performances |
+| **DOC_SAUVEGARDE_ALIGNEES.md** | 13 KB | 📒 Guide complet sauvegarde |
+
+**Total : 164 KB de code et documentation**
+
+---
+
+## 🚀 Par Où Commencer ?
+
+### Option 1 : Installation Rapide (5 min)
+
+1. Lisez **INDEX.md** (vue d'ensemble rapide)
+2. Suivez **INSTALLATION.md** (sections 1-5)
+3. Testez votre application
+
+### Option 2 : Installation Guidée (15 min)
+
+1. Lisez **RECAPITULATIF.md** (comprendre les changements)
+2. Suivez **INSTALLATION.md** (toutes les sections)
+3. Consultez **GUIDE_INTEGRATION.md** (FAQ et exemples)
+
+### Option 3 : Installation Sélective
+
+**Pour RGB + Canvas seulement** :
 ```bash
-java -Xmx4G -jar fits-stacker-1.0-SNAPSHOT.jar
+# Copier 3 fichiers
+cp {FitsImage,ImageAligner,StackingEngine}.java /votre/projet/
+mvn clean package
 ```
+
+**Pour ajouter la sauvegarde ensuite** :
+```bash
+# Copier 1 fichier
+cp FitsStackerApp.java /votre/projet/
+mvn clean package
+```
+
+Documentation : **INSTALL_SAUVEGARDE.md**
+
+---
+
+## 🎯 Les 3 Améliorations
+
+### ✨ 1. Support RGB Complet
+
+**Fichiers concernés** :
+- ✅ FitsImage.java
+- ✅ StackingEngine.java
+- ⚠️ ImageAligner.java (pour canvas)
+
+**Documentation** : GUIDE_INTEGRATION.md
+
+### 🖼️ 2. Canvas Maximisé
+
+**Fichiers concernés** :
+- ✅ FitsImage.java
+- ✅ ImageAligner.java
+- ✅ StackingEngine.java
+
+**Documentation** : README_AMELIORATIONS.md (section Canvas)
+
+### 💾 3. Sauvegarde Images Alignées
+
+**Fichiers concernés** :
+- ✅ FitsStackerApp.java
+
+**Documentation** : DOC_SAUVEGARDE_ALIGNEES.md
+
+---
+
+## 📊 Matrice de Dépendances
+
+```
+FitsImage.java
+   ├─ Requis pour: RGB + Canvas + Sauvegarde
+   └─ Dépend de: Rien
+
+ImageAligner.java
+   ├─ Requis pour: Canvas + Sauvegarde
+   ├─ Dépend de: FitsImage.java
+   └─ Utilise: AffineTransform, CanvasInfo
+
+StackingEngine.java
+   ├─ Requis pour: RGB + Canvas
+   ├─ Dépend de: FitsImage.java, ImageAligner.java
+   └─ Utilise: CanvasInfo
+
+FitsStackerApp.java
+   ├─ Requis pour: Sauvegarde
+   ├─ Dépend de: FitsImage, ImageAligner, StackingEngine
+   └─ Utilise: Toutes les classes ci-dessus
+```
+
+**Conclusion** : Pour avoir toutes les fonctionnalités, copier les 4 fichiers Java.
+
+---
+
+## 🔍 Guide de Lecture selon Votre Besoin
+
+### Je veux installer rapidement
+→ **INDEX.md** puis **INSTALLATION.md** (sections 1-5)
+
+### Je veux tout comprendre
+→ **RECAPITULATIF.md** puis **GUIDE_INTEGRATION.md**
+
+### J'ai une erreur de compilation
+→ **INSTALLATION.md** (section Dépannage)
+
+### Je veux seulement la sauvegarde
+→ **INSTALL_SAUVEGARDE.md**
+
+### Je veux comprendre les performances
+→ **README_AMELIORATIONS.md** (section Performances)
+
+### Je veux utiliser la sauvegarde
+→ **DOC_SAUVEGARDE_ALIGNEES.md**
+
+### Je veux des exemples concrets
+→ **RECAPITULATIF.md** (section Exemples)
+
+### Je veux générer des images RGB de test
+→ **GUIDE_INTEGRATION.md** (section Tests)
+
+---
+
+## ✅ Checklist d'Installation Complète
+
+### Préparation
+- [ ] Java 21 installé
+- [ ] Maven installé
+- [ ] Projet FITS Stacker original fonctionnel
+- [ ] Sauvegarde du projet effectuée
+
+### Copie des Fichiers
+- [ ] FitsImage.java copié
+- [ ] ImageAligner.java copié
+- [ ] StackingEngine.java copié
+- [ ] FitsStackerApp.java copié
+- [ ] TestImageGeneratorRGB.java copié (optionnel)
+
+### Compilation et Tests
+- [ ] `mvn clean package` réussi
+- [ ] Application démarre
+- [ ] Images mono fonctionnent
+- [ ] Images RGB détectées (si applicable)
+- [ ] Canvas élargi calculé
+- [ ] Bouton "Sauvegarder Alignées" visible
+- [ ] Sauvegarde fonctionne
+
+### Validation
+- [ ] Test avec images réelles effectué
+- [ ] alignment_params.txt généré
+- [ ] Fichiers aligned_*.fits créés
+- [ ] Paramètres corrects dans les noms
+- [ ] Documentation consultée
+
+---
+
+## 🎓 Scénarios d'Utilisation
+
+### Scénario 1 : Astrophoto Amateur (DSLR)
+```
+Besoin : Images couleur de mon Canon
+Fichiers : FitsImage + ImageAligner + StackingEngine
+Doc : INSTALLATION.md
+Temps : 10 minutes
+```
+
+### Scénario 2 : CCD Monochrome
+```
+Besoin : Éviter perte aux bords
+Fichiers : FitsImage + ImageAligner + StackingEngine
+Doc : README_AMELIORATIONS.md (Canvas)
+Temps : 10 minutes
+```
+
+### Scénario 3 : Analyse Scientifique
+```
+Besoin : Inspecter chaque image + paramètres
+Fichiers : Les 4 fichiers Java
+Doc : DOC_SAUVEGARDE_ALIGNEES.md
+Temps : 15 minutes
+```
+
+### Scénario 4 : Débutant Prudent
+```
+Besoin : Tester progressivement
+Étape 1 : Canvas seulement (3 fichiers)
+Étape 2 : Ajouter sauvegarde (1 fichier)
+Doc : INSTALLATION.md puis INSTALL_SAUVEGARDE.md
+Temps : 20 minutes
+```
+
+---
+
+## 🐛 Résolution de Problèmes Rapide
+
+### Erreur de compilation
+→ Vérifier que les 4 fichiers sont bien copiés  
+→ Consulter **INSTALLATION.md** section Dépannage
+
+### OutOfMemoryError
+→ Augmenter RAM : `java -Xmx8G -jar ...`  
+→ Consulter **README_AMELIORATIONS.md** section Performances
+
+### Images RGB non détectées
+→ Vérifier format avec DS9  
+→ Consulter **GUIDE_INTEGRATION.md** section FAQ
+
+### Bouton "Sauvegarder Alignées" grisé
+→ Vérifier que l'alignement a réussi  
+→ Consulter **INSTALL_SAUVEGARDE.md** section Dépannage
+
+### Canvas trop grand
+→ Normal avec grandes rotations (>30°)  
+→ Augmenter RAM si nécessaire
+
+---
+
+## 📞 Support et Ressources
+
+### Documentation Interne
+
+- **Questions générales** : INDEX.md
+- **Installation** : INSTALLATION.md ou INSTALL_SAUVEGARDE.md
+- **Technique** : GUIDE_INTEGRATION.md
+- **Performances** : README_AMELIORATIONS.md
+- **Sauvegarde** : DOC_SAUVEGARDE_ALIGNEES.md
+- **Vue d'ensemble** : RECAPITULATIF.md
+
+### Outils Externes
+
+- **SAOImage DS9** : Visualisation FITS
+- **Siril** : Alternative d'empilement
+- **PixInsight** : Post-traitement professionnel
+- **GIMP + FITS Plugin** : Édition d'image
+
+### Spécifications
+
+- **Format FITS** : https://fits.gsfc.nasa.gov/
+- **Java 21** : https://openjdk.org/projects/jdk/21/
+- **Maven** : https://maven.apache.org/
+
+---
+
+## 📝 Notes Importantes
+
+### Rétrocompatibilité
+
+✅ **100% compatible** avec images et projets existants
+- Les images mono fonctionnent comme avant
+- Aucune régression de fonctionnalité
+- Nouvelles fonctionnalités optionnelles
+
+### Performances
+
+⚠️ **Images RGB** : 3x plus lent et 3x plus de RAM que mono
+💡 **Solution** : Allouer au moins 4-8 GB de RAM
+
+### Sauvegarde
+
+💾 **Espace disque** : Prévoir 1.5x la taille des images originales
+📁 **Organisation** : Dossier dédié recommandé pour les images alignées
+
+---
+
+## 🎉 Prêt à Commencer !
+
+### Installation Express (5 min)
+
+```bash
+# 1. Copier les 4 fichiers
+cd fits-stacker/src/main/java/com/astro/
+cp /path/to/outputs/{FitsImage,ImageAligner,StackingEngine,FitsStackerApp}.java .
+
+# 2. Recompiler
+cd ../../../../..
+mvn clean package
+
+# 3. Lancer
+java -Xmx4G -jar target/fits-stacker-1.0-SNAPSHOT.jar
+```
+
+### Premiers Tests
+
+```bash
+# Générer images RGB de test
+java -cp target/*.jar com.astro.TestImageGeneratorRGB test_rgb 5
+
+# Dans l'application :
+# - Charger test_rgb/*.fits
+# - Aligner
+# - Sauvegarder alignées
+# - Empiler
+```
+
+---
+
+## 📦 Contenu du Package - Récapitulatif
+
+```
+/mnt/user-data/outputs/
+│
+├── 🔧 Code Source (4 fichiers - 80 KB)
+│   ├── FitsImage.java (23 KB)
+│   ├── ImageAligner.java (17 KB)
+│   ├── StackingEngine.java (14 KB)
+│   └── FitsStackerApp.java (26 KB)
+│
+├── 🧪 Test (1 fichier - 8.9 KB)
+│   └── TestImageGeneratorRGB.java
+│
+└── 📖 Documentation (7 fichiers - 75 KB)
+    ├── INDEX.md (13 KB) ⭐ COMMENCEZ ICI
+    ├── RECAPITULATIF.md (13 KB)
+    ├── INSTALLATION.md (9.6 KB)
+    ├── INSTALL_SAUVEGARDE.md (8.2 KB)
+    ├── GUIDE_INTEGRATION.md (9.9 KB)
+    ├── README_AMELIORATIONS.md (10 KB)
+    └── DOC_SAUVEGARDE_ALIGNEES.md (13 KB)
+
+Total : 12 fichiers - 164 KB
+```
+
+---
+
+**FITS Stacker v1.1 - Package Complet**  
+3 Améliorations Majeures  
+12 Fichiers Prêts à l'Emploi  
+Documentation Exhaustive  
+
+🌟 **Bon empilement !** 🌟

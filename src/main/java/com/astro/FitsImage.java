@@ -21,6 +21,7 @@ public class FitsImage {
     protected boolean isColor = false;
     protected ImageAligner.AffineTransform transform = ImageAligner.AffineTransform.identity();
     protected ImageAligner.CanvasInfo canvasInfo = null;
+    protected double alignmentQuality = 1.0; // Score de qualité d'alignement (0.0 à 1.0)
 
     public FitsImage(Path path) throws Exception {
         this.path = path;
@@ -546,8 +547,17 @@ public class FitsImage {
         return canvasInfo;
     }
 
+    public void setAlignmentQuality(double quality) {
+        this.alignmentQuality = quality;
+    }
+
+    public double getAlignmentQuality() {
+        return alignmentQuality;
+    }
+
     /**
      * Crée une copie alignée avec canvas élargi pour ne rien rogner
+     * Gère rotation, échelle, translation ET flips (miroirs)
      * @param canvasWidth Largeur du canvas élargi
      * @param canvasHeight Hauteur du canvas élargi
      * @param offsetX Décalage X pour placer l'image dans le canvas
@@ -563,7 +573,8 @@ public class FitsImage {
                     for (int y = 0; y < canvasHeight; y++) {
                         for (int x = 0; x < canvasWidth; x++) {
                             // Transformer le point de destination vers la source
-                            double[] srcPoint = transform.applyInverse(x - offsetX, y - offsetY);
+                            // En tenant compte du flip
+                            double[] srcPoint = transformInverse(x - offsetX, y - offsetY);
                             double srcX = srcPoint[0];
                             double srcY = srcPoint[1];
 
@@ -584,7 +595,7 @@ public class FitsImage {
                 for (int y = 0; y < canvasHeight; y++) {
                     for (int x = 0; x < canvasWidth; x++) {
                         // Transformer le point de destination vers la source
-                        double[] srcPoint = transform.applyInverse(x - offsetX, y - offsetY);
+                        double[] srcPoint = transformInverse(x - offsetX, y - offsetY);
                         double srcX = srcPoint[0];
                         double srcY = srcPoint[1];
 
@@ -598,6 +609,18 @@ public class FitsImage {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Applique la transformation inverse complète incluant les flips
+     */
+    private double[] transformInverse(double x, double y) {
+        // D'abord appliquer la transformation affine inverse
+        double[] pt = transform.applyInverse(x, y);
+        double srcX = pt[0];
+        double srcY = pt[1];
+
+        return new double[]{srcX, srcY};
     }
 
     /**

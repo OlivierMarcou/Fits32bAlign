@@ -6,12 +6,18 @@ import java.util.*;
  * Alignement avancé pour astrophotographie ciel profond
  * - Gère rotation, échelle et translation
  * - Calcule un canvas élargi pour ne rien rogner
+ * - DÉTECTE et REJETTE les images mal alignées
+ * - Score de qualité pour chaque alignement
  */
 public class ImageAligner {
     private static final int MIN_MATCHING_STARS = 10;
     private static final double MAX_DISTANCE_TOLERANCE = 5.0;
     private static final int RANSAC_ITERATIONS = 500;
     private static final double RANSAC_THRESHOLD = 3.0;
+
+    // Seuils de qualité pour accepter un alignement
+    private static final double MIN_QUALITY_SCORE = 0.20; // 20% d'inliers minimum
+    private static final int MIN_ABSOLUTE_INLIERS = 8; // Au moins 8 étoiles qui correspondent
 
     // Classe pour stocker les informations du canvas élargi
     public static class CanvasInfo {
@@ -25,6 +31,37 @@ public class ImageAligner {
             this.height = height;
             this.offsetX = offsetX;
             this.offsetY = offsetY;
+        }
+    }
+
+    // Classe pour stocker les résultats d'alignement avec score de qualité
+    public static class AlignmentResult {
+        public final AffineTransform transform;
+        public final double qualityScore; // Entre 0 et 1
+        public final int inliers;
+        public final int totalMatches;
+        public final boolean accepted;
+        public final String rejectReason;
+
+        public AlignmentResult(AffineTransform transform, int inliers, int totalMatches) {
+            this.transform = transform;
+            this.inliers = inliers;
+            this.totalMatches = totalMatches;
+            this.qualityScore = totalMatches > 0 ? (double) inliers / totalMatches : 0;
+
+            // Déterminer si l'alignement est acceptable
+            if (inliers < MIN_ABSOLUTE_INLIERS) {
+                this.accepted = false;
+                this.rejectReason = String.format("Trop peu d'étoiles correspondantes (%d < %d)",
+                        inliers, MIN_ABSOLUTE_INLIERS);
+            } else if (qualityScore < MIN_QUALITY_SCORE) {
+                this.accepted = false;
+                this.rejectReason = String.format("Score de qualité trop faible (%.1f%% < %.1f%%)",
+                        qualityScore * 100, MIN_QUALITY_SCORE * 100);
+            } else {
+                this.accepted = true;
+                this.rejectReason = null;
+            }
         }
     }
 
@@ -64,11 +101,15 @@ public class ImageAligner {
             }
         }
 
-        // Align each image to reference
+        // Align each image to reference and check quality
+        List<FitsImage> acceptedImages = new ArrayList<>();
+        List<String> rejectedImages = new ArrayList<>();
+
         for (int i = 0; i < images.size(); i++) {
             if (i == refIndex) {
                 // Reference image has identity transform
                 images.get(i).setTransform(AffineTransform.identity());
+                acceptedImages.add(images.get(i));
                 continue;
             }
 
@@ -80,23 +121,66 @@ public class ImageAligner {
                 callback.onProgress(progress, "Alignement de " + image.getFileName() + "...");
             }
 
-            // Find affine transformation (rotation + scale + translation)
-            AffineTransform transform = findAffineTransform(referenceStars, imageStars);
-            image.setTransform(transform);
+            // Find affine transformation with quality check
+            AlignmentResult result = findAffineTransformWithQuality(referenceStars, imageStars);
 
-            if (callback != null) {
-                callback.onProgress(0, String.format(
-                        "✓ %s - Rotation: %.2f°, Échelle: %.2f%%",
-                        image.getFileName(),
-                        Math.toDegrees(transform.rotation),
-                        transform.scale * 100
-                ));
+            if (result.accepted) {
+                image.setTransform(result.transform);
+                acceptedImages.add(image);
+
+                if (callback != null) {
+                    callback.onProgress(0, String.format(
+                            "✓ %s - Qualité: %.1f%% (%d/%d étoiles) - Rot: %.2f°, Échelle: %.2f%%",
+                            image.getFileName(),
+                            result.qualityScore * 100,
+                            result.inliers,
+                            result.totalMatches,
+                            Math.toDegrees(result.transform.rotation),
+                            result.transform.scale * 100
+                    ));
+                }
+            } else {
+                rejectedImages.add(image.getFileName() + " - " + result.rejectReason);
+
+                if (callback != null) {
+                    callback.onProgress(0, String.format(
+                            "✗ REJETÉE: %s - %s",
+                            image.getFileName(),
+                            result.rejectReason
+                    ));
+                }
             }
         }
 
-        // Calculer le canvas élargi nécessaire
+        // Remplacer la liste par seulement les images acceptées
+        images.clear();
+        images.addAll(acceptedImages);
+
         if (callback != null) {
-            callback.onProgress(70, "Calcul du canvas élargi...");
+            callback.onProgress(70, String.format(
+                    "Alignement terminé: %d images acceptées, %d rejetées",
+                    acceptedImages.size(),
+                    rejectedImages.size()
+            ));
+
+            if (!rejectedImages.isEmpty()) {
+                callback.onProgress(0, "Images rejetées:");
+                for (String rejected : rejectedImages) {
+                    callback.onProgress(0, "  - " + rejected);
+                }
+            }
+        }
+
+        if (images.isEmpty()) {
+            if (callback != null) {
+                callback.onProgress(0, "✗ ERREUR: Aucune image n'a pu être alignée correctement!");
+            }
+            return;
+        }
+
+        // Calculer le canvas élargi nécessaire (seulement pour les images acceptées)
+        if (callback != null) {
+            callback.onProgress(75, "Calcul du canvas élargi...");
         }
 
         CanvasInfo canvasInfo = calculateExpandedCanvas(images);
@@ -115,7 +199,10 @@ public class ImageAligner {
         }
 
         if (callback != null) {
-            callback.onProgress(100, "Alignement terminé!");
+            callback.onProgress(100, String.format(
+                    "Alignement terminé! %d images prêtes pour l'empilement",
+                    images.size()
+            ));
         }
     }
 
@@ -225,14 +312,15 @@ public class ImageAligner {
     /**
      * Trouve la transformation affine entre deux ensembles d'étoiles
      * en utilisant RANSAC pour robustesse
+     * RETOURNE aussi un score de qualité
      */
-    private static AffineTransform findAffineTransform(List<Star> referenceStars, List<Star> imageStars) {
+    private static AlignmentResult findAffineTransformWithQuality(List<Star> referenceStars, List<Star> imageStars) {
         // Find potential star matches using triangle matching
         List<StarMatch> matches = findStarMatches(referenceStars, imageStars);
 
         if (matches.size() < 3) {
             System.out.println("⚠️ Pas assez de correspondances d'étoiles trouvées: " + matches.size());
-            return AffineTransform.identity();
+            return new AlignmentResult(AffineTransform.identity(), 0, matches.size());
         }
 
         // Use RANSAC to find best transformation
@@ -273,12 +361,12 @@ public class ImageAligner {
 
         if (bestTransform == null) {
             System.out.println("⚠️ Impossible de trouver une transformation valide");
-            return AffineTransform.identity();
+            return new AlignmentResult(AffineTransform.identity(), 0, matches.size());
         }
 
-        System.out.println("✓ Transformation trouvée avec " + bestInliers + " inliers sur " + matches.size() + " correspondances");
+        System.out.println("Transformation trouvée avec " + bestInliers + " inliers sur " + matches.size() + " correspondances");
 
-        return bestTransform;
+        return new AlignmentResult(bestTransform, bestInliers, matches.size());
     }
 
     private static List<StarMatch> findStarMatches(List<Star> referenceStars, List<Star> imageStars) {
