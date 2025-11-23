@@ -3,7 +3,7 @@ package com.astro;
 import java.util.*;
 
 public class StackingEngine {
-
+    
     public enum StackingMethod {
         AVERAGE("Moyenne"),
         MEDIAN("Médiane"),
@@ -23,28 +23,28 @@ public class StackingEngine {
         }
     }
 
-    public static FitsImage stackImages(List<FitsImage> images, StackingMethod method,
-                                        ImageAligner.ProgressCallback callback) throws Exception {
+    public static FitsImage stackImages(List<FitsImage> images, StackingMethod method, 
+                                       ImageAligner.ProgressCallback callback) throws Exception {
         if (images.isEmpty()) {
             throw new IllegalArgumentException("Aucune image à empiler");
         }
 
         // Vérifier si on travaille avec des images couleur ou mono
         boolean isColor = images.get(0).isColor();
-
+        
         System.out.println("=== Début de l'empilement ===");
         System.out.println("Nombre d'images: " + images.size());
         System.out.println("Type: " + (isColor ? "RGB" : "Mono"));
         System.out.println("Méthode: " + method.getDisplayName());
-
+        
         // Récupérer les informations du canvas depuis la première image
         ImageAligner.CanvasInfo canvasInfo = images.get(0).getCanvasInfo();
         if (canvasInfo == null) {
             // Fallback si pas d'info de canvas (alignement non effectué)
             canvasInfo = new ImageAligner.CanvasInfo(
-                    images.get(0).getWidth(),
-                    images.get(0).getHeight(),
-                    0, 0
+                images.get(0).getWidth(),
+                images.get(0).getHeight(),
+                0, 0
             );
         }
 
@@ -52,7 +52,7 @@ public class StackingEngine {
         int canvasHeight = canvasInfo.height;
         int offsetX = canvasInfo.offsetX;
         int offsetY = canvasInfo.offsetY;
-
+        
         System.out.println("Canvas: " + canvasWidth + "x" + canvasHeight);
         System.out.println("Offset: " + offsetX + ", " + offsetY);
 
@@ -64,15 +64,15 @@ public class StackingEngine {
         List<FitsImage> alignedImages = new ArrayList<>();
         for (int i = 0; i < images.size(); i++) {
             FitsImage img = images.get(i);
-
+            
             System.out.println("Alignement image " + (i+1) + ": " + img.getFileName());
-            System.out.println("  Transformation: rot=" + Math.toDegrees(img.getTransform().rotation) +
-                    "°, scale=" + img.getTransform().scale +
-                    ", tx=" + img.getTransform().tx + ", ty=" + img.getTransform().ty);
-
+            System.out.println("  Transformation: rot=" + Math.toDegrees(img.getTransform().rotation) + 
+                             "°, scale=" + img.getTransform().scale +
+                             ", tx=" + img.getTransform().tx + ", ty=" + img.getTransform().ty);
+            
             FitsImage aligned = img.createAlignedCopy(canvasWidth, canvasHeight, offsetX, offsetY);
             alignedImages.add(aligned);
-
+            
             // Vérification: compter les pixels non-nuls
             int nonZeroPixels = 0;
             for (int y = 0; y < canvasHeight; y++) {
@@ -83,8 +83,8 @@ public class StackingEngine {
                 }
             }
             System.out.println("  Pixels non-nuls: " + nonZeroPixels + " / " + (canvasWidth*canvasHeight) +
-                    " (" + (100.0*nonZeroPixels/(canvasWidth*canvasHeight)) + "%)");
-
+                             " (" + (100.0*nonZeroPixels/(canvasWidth*canvasHeight)) + "%)");
+            
             if (callback != null) {
                 int progress = (int) ((i * 20.0) / images.size());
                 callback.onProgress(progress, "Alignement image " + (i + 1) + "/" + images.size());
@@ -93,10 +93,10 @@ public class StackingEngine {
 
         // Create result image
         FitsImage result = FitsImage.createEmpty(
-                images.get(0).getPath(),
-                canvasWidth,
-                canvasHeight,
-                isColor
+            images.get(0).getPath(),
+            canvasWidth,
+            canvasHeight,
+            isColor
         );
 
         int totalPixels = canvasWidth * canvasHeight;
@@ -118,8 +118,8 @@ public class StackingEngine {
                         processedPixels++;
                         if (callback != null && processedPixels % 50000 == 0) {
                             int progress = 20 + c * 25 + (int) (((double) processedPixels / totalPixels) * 25);
-                            callback.onProgress(progress, "Canal " + channelName + ": " +
-                                    (processedPixels * 100 / totalPixels) + "%");
+                            callback.onProgress(progress, "Canal " + channelName + ": " + 
+                                (processedPixels * 100 / totalPixels) + "%");
                         }
                     }
                 }
@@ -145,20 +145,20 @@ public class StackingEngine {
                     processedPixels++;
                     if (callback != null && processedPixels % 10000 == 0) {
                         int progress = 20 + (int) ((processedPixels * 75.0) / totalPixels);
-                        callback.onProgress(progress, "Empilement: " +
-                                (processedPixels * 100 / totalPixels) + "%");
+                        callback.onProgress(progress, "Empilement: " + 
+                            (processedPixels * 100 / totalPixels) + "%");
                     }
                 }
             }
         }
-
+        
         // Vérification du résultat
         System.out.println("=== Vérification du résultat ===");
         float minVal = Float.MAX_VALUE;
         float maxVal = Float.MIN_VALUE;
         double sumVal = 0;
         int nonZeroCount = 0;
-
+        
         for (int y = 0; y < canvasHeight; y++) {
             for (int x = 0; x < canvasWidth; x++) {
                 float val = result.getPixel(x, y);
@@ -170,7 +170,7 @@ public class StackingEngine {
                 }
             }
         }
-
+        
         System.out.println("Pixels non-nuls: " + nonZeroCount + " / " + totalPixels);
         System.out.println("Min: " + minVal + ", Max: " + maxVal + ", Moyenne: " + (sumVal/nonZeroCount));
         System.out.println("=== Empilement terminé ===");
@@ -325,7 +325,7 @@ public class StackingEngine {
         for (int i = 0; i < images.size(); i++) {
             FitsImage image = images.get(i);
             float value = image.getPixel(x, y);
-
+            
             if (value > 0) {
                 double weight = 1.0 / (1.0 + i * 0.1);
                 weightedSum += value * weight;
@@ -454,7 +454,7 @@ public class StackingEngine {
         for (int i = 0; i < images.size(); i++) {
             FitsImage image = images.get(i);
             float value = image.getPixel(channel, x, y);
-
+            
             if (value > 0) {
                 double weight = 1.0 / (1.0 + i * 0.1);
                 weightedSum += value * weight;
