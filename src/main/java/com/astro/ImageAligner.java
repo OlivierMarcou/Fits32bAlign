@@ -2,85 +2,232 @@ package com.astro;
 
 import java.util.*;
 
+/**
+ * Alignement avancé pour astrophotographie ciel profond
+ * Gère rotation, échelle et translation
+ */
 public class ImageAligner {
     private static final int MIN_MATCHING_STARS = 10;
     private static final double MAX_DISTANCE_TOLERANCE = 5.0;
+    private static final int RANSAC_ITERATIONS = 500;
+    private static final double RANSAC_THRESHOLD = 3.0;
 
     public static void alignImages(List<FitsImage> images, ProgressCallback callback) {
         if (images.isEmpty()) return;
 
-        // Use first image as reference
-        FitsImage reference = images.get(0);
-        
+        // Detect stars in all images first
         if (callback != null) {
-            callback.onProgress(0, "Détection des étoiles dans l'image de référence...");
+            callback.onProgress(0, "Détection des étoiles dans toutes les images...");
         }
-        
-        List<Star> referenceStars = StarDetector.detectStars(reference, 100);
-        
-        if (referenceStars.size() < MIN_MATCHING_STARS) {
+
+        List<List<Star>> allStars = new ArrayList<>();
+        for (int i = 0; i < images.size(); i++) {
+            FitsImage image = images.get(i);
+            List<Star> stars = StarDetector.detectStars(image, 100);
+            allStars.add(stars);
+
             if (callback != null) {
-                callback.onProgress(0, "Attention: peu d'étoiles détectées dans l'image de référence");
+                int progress = (int) ((i * 30.0) / images.size());
+                callback.onProgress(progress, "Détection étoiles: " + image.getFileName());
             }
         }
 
-        // Align each subsequent image
-        for (int i = 1; i < images.size(); i++) {
-            FitsImage image = images.get(i);
-            
+        // Find reference image (largest scale = biggest field coverage)
+        int refIndex = findReferenceImage(images, allStars);
+        FitsImage reference = images.get(refIndex);
+        List<Star> referenceStars = allStars.get(refIndex);
+
+        if (callback != null) {
+            callback.onProgress(30, "Image de référence: " + reference.getFileName() +
+                    " (plus grande échelle détectée)");
+        }
+
+        if (referenceStars.size() < MIN_MATCHING_STARS) {
             if (callback != null) {
-                int progress = (int) ((i * 100.0) / images.size());
+                callback.onProgress(30, "⚠️ Attention: peu d'étoiles détectées dans l'image de référence");
+            }
+        }
+
+        // Align each image to reference
+        for (int i = 0; i < images.size(); i++) {
+            if (i == refIndex) {
+                // Reference image has identity transform
+                images.get(i).setTransform(AffineTransform.identity());
+                continue;
+            }
+
+            FitsImage image = images.get(i);
+            List<Star> imageStars = allStars.get(i);
+
+            if (callback != null) {
+                int progress = 30 + (int) ((i * 70.0) / images.size());
                 callback.onProgress(progress, "Alignement de " + image.getFileName() + "...");
             }
-            
-            List<Star> imageStars = StarDetector.detectStars(image, 100);
-            
-            // Find translation offset
-            Offset offset = findBestOffset(referenceStars, imageStars);
-            image.setOffsetX(-offset.dx);
-            image.setOffsetY(-offset.dy);
+
+            // Find affine transformation (rotation + scale + translation)
+            AffineTransform transform = findAffineTransform(referenceStars, imageStars);
+            image.setTransform(transform);
+
+            if (callback != null) {
+                callback.onProgress(0, String.format(
+                        "✓ %s - Rotation: %.2f°, Échelle: %.2f%%",
+                        image.getFileName(),
+                        Math.toDegrees(transform.rotation),
+                        transform.scale * 100
+                ));
+            }
         }
-        
+
         if (callback != null) {
             callback.onProgress(100, "Alignement terminé!");
         }
     }
 
-    private static Offset findBestOffset(List<Star> referenceStars, List<Star> imageStars) {
+    /**
+     * Trouve l'image avec la plus grande échelle (sujet le plus grand)
+     * basé sur la densité et la distribution des étoiles
+     */
+    private static int findReferenceImage(List<FitsImage> images, List<List<Star>> allStars) {
+        int bestIndex = 0;
         double bestScore = 0;
-        Offset bestOffset = new Offset(0, 0);
 
-        // Try to match stars using triangle similarity
+        for (int i = 0; i < images.size(); i++) {
+            List<Star> stars = allStars.get(i);
+            if (stars.size() < 10) continue;
+
+            // Calculate average distance between brightest stars
+            // Smaller average distance = larger scale (more zoomed in)
+            double avgDistance = calculateAverageStarDistance(stars);
+
+            // Score based on number of stars and average distance
+            // We want: many stars AND small distances (= good detail, large scale)
+            double score = stars.size() / (avgDistance + 1.0);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = i;
+            }
+        }
+
+        return bestIndex;
+    }
+
+    private static double calculateAverageStarDistance(List<Star> stars) {
+        if (stars.size() < 10) return Double.MAX_VALUE;
+
+        int numPairs = Math.min(30, stars.size() / 2);
+        double sumDistances = 0;
+        int count = 0;
+
+        for (int i = 0; i < numPairs && i < stars.size(); i++) {
+            for (int j = i + 1; j < numPairs && j < stars.size(); j++) {
+                sumDistances += stars.get(i).distanceTo(stars.get(j));
+                count++;
+            }
+        }
+
+        return count > 0 ? sumDistances / count : Double.MAX_VALUE;
+    }
+
+    /**
+     * Trouve la transformation affine entre deux ensembles d'étoiles
+     * en utilisant RANSAC pour robustesse
+     */
+    private static AffineTransform findAffineTransform(List<Star> referenceStars, List<Star> imageStars) {
+        // Find potential star matches using triangle matching
+        List<StarMatch> matches = findStarMatches(referenceStars, imageStars);
+
+        if (matches.size() < 3) {
+            System.out.println("⚠️ Pas assez de correspondances d'étoiles trouvées: " + matches.size());
+            return AffineTransform.identity();
+        }
+
+        // Use RANSAC to find best transformation
+        AffineTransform bestTransform = null;
+        int bestInliers = 0;
+
+        Random random = new Random(42);
+
+        for (int iter = 0; iter < RANSAC_ITERATIONS; iter++) {
+            // Randomly select 3 matches
+            if (matches.size() < 3) break;
+
+            List<StarMatch> sample = new ArrayList<>();
+            Set<Integer> used = new HashSet<>();
+
+            while (sample.size() < 3 && used.size() < matches.size()) {
+                int idx = random.nextInt(matches.size());
+                if (!used.contains(idx)) {
+                    sample.add(matches.get(idx));
+                    used.add(idx);
+                }
+            }
+
+            if (sample.size() < 3) continue;
+
+            // Compute transformation from these 3 points
+            AffineTransform transform = computeAffineFromMatches(sample);
+            if (transform == null) continue;
+
+            // Count inliers
+            int inliers = countInliers(matches, transform);
+
+            if (inliers > bestInliers) {
+                bestInliers = inliers;
+                bestTransform = transform;
+            }
+        }
+
+        if (bestTransform == null) {
+            System.out.println("⚠️ Impossible de trouver une transformation valide");
+            return AffineTransform.identity();
+        }
+
+        System.out.println("✓ Transformation trouvée avec " + bestInliers + " inliers sur " + matches.size() + " correspondances");
+
+        return bestTransform;
+    }
+
+    private static List<StarMatch> findStarMatches(List<Star> referenceStars, List<Star> imageStars) {
+        List<StarMatch> matches = new ArrayList<>();
+
+        // Create triangles for matching
         List<StarTriangle> refTriangles = createTriangles(referenceStars);
         List<StarTriangle> imgTriangles = createTriangles(imageStars);
 
+        // Match triangles (scale-invariant, rotation-invariant)
         for (StarTriangle refTri : refTriangles) {
             for (StarTriangle imgTri : imgTriangles) {
                 if (trianglesMatch(refTri, imgTri)) {
-                    // Calculate offset from this match
-                    double dx = refTri.s1.getX() - imgTri.s1.getX();
-                    double dy = refTri.s1.getY() - imgTri.s1.getY();
-                    
-                    // Score this offset by counting matching stars
-                    double score = scoreOffset(referenceStars, imageStars, dx, dy);
-                    
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestOffset = new Offset(dx, dy);
-                    }
+                    // Add the three star correspondences
+                    matches.add(new StarMatch(refTri.s1, imgTri.s1));
+                    matches.add(new StarMatch(refTri.s2, imgTri.s2));
+                    matches.add(new StarMatch(refTri.s3, imgTri.s3));
                 }
             }
         }
 
-        return bestOffset;
+        // Remove duplicates
+        Set<String> seen = new HashSet<>();
+        List<StarMatch> uniqueMatches = new ArrayList<>();
+
+        for (StarMatch match : matches) {
+            String key = String.format("%.1f,%.1f-%.1f,%.1f",
+                    match.ref.getX(), match.ref.getY(),
+                    match.img.getX(), match.img.getY());
+            if (!seen.contains(key)) {
+                seen.add(key);
+                uniqueMatches.add(match);
+            }
+        }
+
+        return uniqueMatches;
     }
 
     private static List<StarTriangle> createTriangles(List<Star> stars) {
         List<StarTriangle> triangles = new ArrayList<>();
-        
-        // Create triangles from brightest stars
         int maxStars = Math.min(20, stars.size());
-        
+
         for (int i = 0; i < maxStars - 2; i++) {
             for (int j = i + 1; j < maxStars - 1; j++) {
                 for (int k = j + 1; k < maxStars; k++) {
@@ -88,49 +235,82 @@ public class ImageAligner {
                 }
             }
         }
-        
+
         return triangles;
     }
 
     private static boolean trianglesMatch(StarTriangle t1, StarTriangle t2) {
         double[] sides1 = t1.getSortedSides();
         double[] sides2 = t2.getSortedSides();
-        
-        // Check if side ratios are similar
-        double ratio1 = sides1[1] / sides1[0];
-        double ratio2 = sides2[1] / sides2[0];
-        double ratio3 = sides1[2] / sides1[0];
-        double ratio4 = sides2[2] / sides2[0];
-        
-        double tolerance = 0.1;
-        
-        return Math.abs(ratio1 - ratio2) < tolerance && 
-               Math.abs(ratio3 - ratio4) < tolerance;
+
+        // Check if side ratios are similar (scale-invariant)
+        double ratio1_1 = sides1[1] / sides1[0];
+        double ratio1_2 = sides1[2] / sides1[0];
+        double ratio2_1 = sides2[1] / sides2[0];
+        double ratio2_2 = sides2[2] / sides2[0];
+
+        double tolerance = 0.15; // Plus tolérant pour ciel profond
+
+        return Math.abs(ratio1_1 - ratio2_1) < tolerance &&
+                Math.abs(ratio1_2 - ratio2_2) < tolerance;
     }
 
-    private static double scoreOffset(List<Star> refStars, List<Star> imgStars, 
-                                     double dx, double dy) {
-        int matches = 0;
-        
-        for (Star refStar : refStars) {
-            double targetX = refStar.getX() - dx;
-            double targetY = refStar.getY() - dy;
-            
-            // Find closest star in image
-            for (Star imgStar : imgStars) {
-                double dist = Math.sqrt(
-                    Math.pow(imgStar.getX() - targetX, 2) + 
-                    Math.pow(imgStar.getY() - targetY, 2)
-                );
-                
-                if (dist < MAX_DISTANCE_TOLERANCE) {
-                    matches++;
-                    break;
-                }
+    /**
+     * Calcule la transformation affine à partir de 3 correspondances de points
+     */
+    private static AffineTransform computeAffineFromMatches(List<StarMatch> matches) {
+        if (matches.size() < 3) return null;
+
+        // Get 3 point correspondences
+        StarMatch m1 = matches.get(0);
+        StarMatch m2 = matches.get(1);
+        StarMatch m3 = matches.get(2);
+
+        // Calculate centroid in both sets
+        double refCx = (m1.ref.getX() + m2.ref.getX() + m3.ref.getX()) / 3.0;
+        double refCy = (m1.ref.getY() + m2.ref.getY() + m3.ref.getY()) / 3.0;
+        double imgCx = (m1.img.getX() + m2.img.getX() + m3.img.getX()) / 3.0;
+        double imgCy = (m1.img.getY() + m2.img.getY() + m3.img.getY()) / 3.0;
+
+        // Calculate scale and rotation using first two points
+        double refDx = m2.ref.getX() - m1.ref.getX();
+        double refDy = m2.ref.getY() - m1.ref.getY();
+        double imgDx = m2.img.getX() - m1.img.getX();
+        double imgDy = m2.img.getY() - m1.img.getY();
+
+        double refDist = Math.sqrt(refDx * refDx + refDy * refDy);
+        double imgDist = Math.sqrt(imgDx * imgDx + imgDy * imgDy);
+
+        if (refDist < 1.0 || imgDist < 1.0) return null;
+
+        double scale = refDist / imgDist;
+
+        double refAngle = Math.atan2(refDy, refDx);
+        double imgAngle = Math.atan2(imgDy, imgDx);
+        double rotation = refAngle - imgAngle;
+
+        // Translation
+        double tx = refCx - imgCx * scale * Math.cos(rotation) + imgCy * scale * Math.sin(rotation);
+        double ty = refCy - imgCx * scale * Math.sin(rotation) - imgCy * scale * Math.cos(rotation);
+
+        return new AffineTransform(scale, rotation, tx, ty);
+    }
+
+    private static int countInliers(List<StarMatch> matches, AffineTransform transform) {
+        int inliers = 0;
+
+        for (StarMatch match : matches) {
+            double[] transformed = transform.apply(match.img.getX(), match.img.getY());
+            double dx = transformed[0] - match.ref.getX();
+            double dy = transformed[1] - match.ref.getY();
+            double error = Math.sqrt(dx * dx + dy * dy);
+
+            if (error < RANSAC_THRESHOLD) {
+                inliers++;
             }
         }
-        
-        return matches;
+
+        return inliers;
     }
 
     private static class StarTriangle {
@@ -153,13 +333,62 @@ public class ImageAligner {
         }
     }
 
-    private static class Offset {
-        final double dx;
-        final double dy;
+    private static class StarMatch {
+        final Star ref;
+        final Star img;
 
-        Offset(double dx, double dy) {
-            this.dx = dx;
-            this.dy = dy;
+        StarMatch(Star ref, Star img) {
+            this.ref = ref;
+            this.img = img;
+        }
+    }
+
+    /**
+     * Transformation affine: scale + rotation + translation
+     */
+    public static class AffineTransform {
+        public final double scale;
+        public final double rotation; // en radians
+        public final double tx, ty;
+
+        public AffineTransform(double scale, double rotation, double tx, double ty) {
+            this.scale = scale;
+            this.rotation = rotation;
+            this.tx = tx;
+            this.ty = ty;
+        }
+
+        public static AffineTransform identity() {
+            return new AffineTransform(1.0, 0.0, 0.0, 0.0);
+        }
+
+        /**
+         * Applique la transformation à un point (x, y)
+         */
+        public double[] apply(double x, double y) {
+            double cos = Math.cos(rotation);
+            double sin = Math.sin(rotation);
+
+            double newX = scale * (x * cos - y * sin) + tx;
+            double newY = scale * (x * sin + y * cos) + ty;
+
+            return new double[]{newX, newY};
+        }
+
+        /**
+         * Transformation inverse
+         */
+        public double[] applyInverse(double x, double y) {
+            double cos = Math.cos(-rotation);
+            double sin = Math.sin(-rotation);
+
+            double dx = x - tx;
+            double dy = y - ty;
+
+            double newX = (dx * cos - dy * sin) / scale;
+            double newY = (dx * sin + dy * cos) / scale;
+
+            return new double[]{newX, newY};
         }
     }
 

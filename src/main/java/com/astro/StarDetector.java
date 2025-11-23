@@ -7,7 +7,7 @@ public class StarDetector {
     private static final int MAX_STAR_SIZE = 30;
     private static final double THRESHOLD_MULTIPLIER = 3.0;
 
-    public static List<com.astro.Star> detectStars(com.astro.FitsImage image, int maxStars) {
+    public static List<Star> detectStars(FitsImage image, int maxStars) {
         float[][] data = image.getData();
         int width = image.getWidth();
         int height = image.getHeight();
